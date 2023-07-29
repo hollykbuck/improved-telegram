@@ -3,12 +3,18 @@ A redux implementation in python.
 """
 
 import sys, os, json, signal, logging
-from typing import TypedDict, Callable, TypeVar, Generic, cast, Optional
-
+from typing import TypedDict, Callable, TypeVar, Generic, cast, Optional, Protocol, Any, runtime_checkable, overload
+from functools import reduce
 T = TypeVar("T")
 
 sentinel = {}
 
+def compose(*funcs):
+    if not funcs:
+        return lambda arg: arg
+    if len(funcs) == 1:
+        return funcs[0]
+    return reduce(lambda f, g: lambda *args, **kwargs: f(g(*args, **kwargs)), funcs)
 
 class Action(Generic[T]):
     type: str
@@ -21,13 +27,14 @@ class Action(Generic[T]):
         return json.dumps(self.__dict__)
 
 
-U = TypeVar("U")
+class SupportsGetState(Protocol):
+    def getState(self):
+        ...
 
-
-class Store(Generic[T]):
+class Store(SupportsGetState):
     def __init__(
         self,
-        reducer: Callable[[T, Action], T],
+        reducer: Callable[[Any, Action], Any]
     ):
         self._state = {}  # type: ignore
         self._listeners = []
@@ -43,21 +50,25 @@ class Store(Generic[T]):
 
     def subscribe(self, listener: Callable[[], None]):
         self._listeners.append(listener)
+        def unsubscribe():
+            self._listeners.remove(listener)
+        return unsubscribe
 
-    # def dispatch(self, action: Action[U]):
-    #     self._state = self._reducer(self._state, action)
-    #     for listener in self._listeners:
-    #         listener()
-
-    def getState(self) -> T:
+    def getState(self):
         return self._state
 
+    def replaceReducer(self, reducer: Callable[[Any, Action], Any]):
+        self._reducer = reducer
+        self.dispatch(Action(sentinel)) # type: ignore
 
 def createStore(
     reducer: Callable[[T, Action], T],
     initState,
     rewriteCreateStoreFunc: Optional[Callable] = None,
-) -> Store[T]:
+) -> Store:
+    if isinstance(initState, Callable):
+        rewriteCreateStoreFunc = cast(Callable, initState)
+        initState = None
     if rewriteCreateStoreFunc:
         newCreateStore = rewriteCreateStoreFunc(createStore)
         return newCreateStore(reducer, initState)
@@ -75,12 +86,16 @@ def combineReducers(
 
     return combinedReducer
 
+class SimpleStore(SupportsGetState):
+    def __init__(self, getState: Callable[[], Any]) -> None:
+        self.getState = getState
 
 def applyMiddleware(*middlewares):
     def rewriteCreateStoreFunc(oldCreateStore):
         def newCreateStore(reducer, initState):
             store = oldCreateStore(reducer, initState)
-            chain = [middleware(store) for middleware in middlewares]
+            simpleStore = SimpleStore(store.getState)
+            chain = [middleware(simpleStore) for middleware in middlewares]
             dispatch = store.dispatch
             for middleware in reversed(chain):
                 dispatch = middleware(dispatch)
@@ -99,14 +114,12 @@ def test1():
 def test2():
     def subscribeInfo():
         state = store.getState()
-        # print("info: %s: %s" % (state["info"]["name"], state["info"]["description"]))
         logging.debug(
             "info: {}: {}".format(state["info"]["name"], state["info"]["description"])
         )
 
     def subscribeCounter():
         state = store.getState()
-        # print("counter: %d" % state["counter"]["count"])
         logging.debug("counter: {}".format(state["counter"]["count"]))
 
     def counterReducer(state, action: Action):
@@ -157,8 +170,8 @@ def test2():
 
     reducer = combineReducers({"counter": counterReducer, "info": infoReducer})
     rewriteCreateStoreFunc = applyMiddleware(exceptionMiddleware, loggerMiddleware)
-    store = createStore(reducer, None, rewriteCreateStoreFunc)
-    store.subscribe(subscribeInfo)
+    store = createStore(reducer, rewriteCreateStoreFunc)
+    unsub = store.subscribe(subscribeInfo)
     store.subscribe(subscribeCounter)
     store.dispatch(Action("setName", "redux"))
     store.dispatch(Action("setDescription", "a redux implementation in python"))
