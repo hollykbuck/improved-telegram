@@ -4,7 +4,7 @@ qt-redux
 
 import logging, sys, os
 from typing import Callable, Dict, List, Optional, Tuple, Union
-from PySide6.QtCore import QObject, QAbstractListModel, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QAbstractListModel, Qt, Signal, Slot, QEvent
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -27,6 +27,19 @@ tick = tick.scaled(
     Qt.TransformationMode.SmoothTransformation,
 )
 
+class FilterBtn(QObject):
+    def __init__(self, parent: QObject | None = ...) -> None:
+        super().__init__(parent)
+    
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        match event.type():
+            case QEvent.Type.Enter:
+                print("hover enter")
+                
+            case QEvent.Type.Leave:
+                print("hover leave")
+        
+        return super().eventFilter(watched, event)
 
 class TodoModel(QAbstractListModel):
     def __init__(self, todos=None):
@@ -56,6 +69,27 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.addButton.clicked.connect(self.add)
         self.deleteButton.clicked.connect(self.delete)
         self.completeButton.clicked.connect(self.complete)
+        self.addButton.installEventFilter(FilterBtn(self))
+        def enterEvent(event):
+            self.addButton.setStyleSheet("""
+background-color: #0b5ed7;
+border-color: #0a58ca;
+border-radius: 6px;
+color: white;
+font-size: 16px;
+padding: 6px 12px;                
+                                         """)
+        def leaveEvent(event):
+            self.addButton.setStyleSheet("""
+background-color: #0d6efd;
+border-color: #0b5ed7;
+border-radius: 6px;
+color: white;
+font-size: 16px;
+padding: 6px 12px;
+                                         """)
+        self.addButton.enterEvent = enterEvent
+        self.addButton.leaveEvent = leaveEvent
 
     def add(self):
         """
